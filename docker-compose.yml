@@ -33,6 +33,7 @@ services:
       - "8002:8000"
     volumes:
       - ./:/app
+      - ./guesstheparty:/app/guesstheparty
       - ./staticfiles:/app/staticfiles
     env_file:
       - .env
