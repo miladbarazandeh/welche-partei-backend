@@ -185,15 +185,24 @@ def global_stats(request):
         leaning = PARTY_LEANING.get(row["politician__party"])
         if leaning is None:
             continue
-        b = leaning_buckets.setdefault(leaning, {"leaning": leaning, "total": 0, "correct": 0, "spectrum_correct": 0})
+        b = leaning_buckets.setdefault(
+            leaning,
+            {"leaning": leaning, "total": 0, "correct": 0, "spectrum_correct": 0},
+        )
         b["total"] += row["total"]
         b["correct"] += row["correct"]
         b["spectrum_correct"] += row["spectrum_correct"]
     leaning_stats = [
         {
             **b,
-            "accuracy": round(b["correct"] / b["total"] * 100, 1) if b["total"] else 0.0,
-            "spectrum_accuracy": round(b["spectrum_correct"] / b["total"] * 100, 1) if b["total"] else 0.0,
+            "accuracy": (
+                round(b["correct"] / b["total"] * 100, 1) if b["total"] else 0.0
+            ),
+            "spectrum_accuracy": (
+                round(b["spectrum_correct"] / b["total"] * 100, 1)
+                if b["total"]
+                else 0.0
+            ),
         }
         for b in leaning_buckets.values()
     ]
@@ -216,10 +225,12 @@ def global_stats(request):
     politician_stats = list(
         Answer.objects.values(
             "politician__name", "politician__party", "politician__image_local"
-        ).annotate(
+        )
+        .annotate(
             total=Count("id"),
             correct=Count("id", filter=Q(is_correct=True)),
-        ).filter(total__gt=10)
+        )
+        .filter(total__gt=10)
     )
 
     def accuracy(row):
@@ -241,10 +252,10 @@ def global_stats(request):
 
     top_correct = [
         serialize_politician(r)
-        for r in sorted(politician_stats, key=accuracy, reverse=True)[:5]
+        for r in sorted(politician_stats, key=accuracy, reverse=True)[:10]
     ]
     top_wrong = [
-        serialize_politician(r) for r in sorted(politician_stats, key=accuracy)[:5]
+        serialize_politician(r) for r in sorted(politician_stats, key=accuracy)[:10]
     ]
 
     data = {
