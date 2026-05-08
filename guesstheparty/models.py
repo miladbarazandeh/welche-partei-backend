@@ -9,6 +9,15 @@ CANONICAL_PARTIES = [
     ('FDP', 'FDP'),
 ]
 
+PARTY_LEANING = {
+    'SPD': 'left',
+    'Grüne': 'left',
+    'Die Linke': 'left',
+    'CDU/CSU': 'right',
+    'FDP': 'right',
+    'AfD': 'right',
+}
+
 
 class Politician(models.Model):
     abgeordnetenwatch_id = models.IntegerField(unique=True)
@@ -34,6 +43,7 @@ class Answer(models.Model):
     session_key = models.CharField(max_length=40, db_index=True)
     guessed_party = models.CharField(max_length=50)
     is_correct = models.BooleanField()
+    is_spectrum_correct = models.BooleanField(null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
