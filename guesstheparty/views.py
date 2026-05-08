@@ -230,7 +230,7 @@ def global_stats(request):
             total=Count("id"),
             correct=Count("id", filter=Q(is_correct=True)),
         )
-        .filter(total__gt=10)
+        .filter(total__gt=20)
     )
 
     def accuracy(row):
