@@ -219,7 +219,7 @@ def global_stats(request):
         ).annotate(
             total=Count("id"),
             correct=Count("id", filter=Q(is_correct=True)),
-        )
+        ).filter(total__gt=10)
     )
 
     def accuracy(row):
