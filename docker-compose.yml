@@ -1,0 +1,43 @@
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - welche_partei_data:/var/lib/postgresql
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    image: backend-image
+    # build:
+      # context: .
+      # dockerfile: Dockerfile
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py collectstatic --noinput &&
+             gunicorn --config gunicorn_config.py backend.wsgi:application"
+    restart: always
+    expose:
+      - "8000"
+    ports:
+      - "8002:8000"
+    volumes:
+      - ./:/app
+      - ./staticfiles:/app/staticfiles
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+
+
+volumes:
+  welche_partei_data:

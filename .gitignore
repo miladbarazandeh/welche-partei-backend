@@ -1,0 +1,4 @@
+.env
+/politician_data
+db.sqlite3
+__pycache__/
