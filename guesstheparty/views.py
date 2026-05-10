@@ -67,7 +67,7 @@ def random_politician(request):
         party__in=GAME_PARTIES, image_url__isnull=False
     ).exclude(id__in=seen_ids)
     if not qs.exists():
-        return Response({"error": "No more politicians available"}, status=404)
+        return Response({"game_over": True, **_session_stats(session_key)})
 
     pk = random.choice(list(qs.values_list("id", flat=True)))
     politician = Politician.objects.get(pk=pk)
