@@ -230,7 +230,7 @@ def global_stats(request):
             total=Count("id"),
             correct=Count("id", filter=Q(is_correct=True)),
         )
-        .filter(total__gt=20)
+        .filter(total__gt=50)
     )
 
     def accuracy(row):
@@ -250,12 +250,15 @@ def global_stats(request):
             "accuracy": round(accuracy(row) * 100, 1),
         }
 
+    def sort_key(row):
+        return (row["accuracy"], row["total"])
+
     top_correct = [
         serialize_politician(r)
-        for r in sorted(politician_stats, key=accuracy, reverse=True)[:10]
+        for r in sorted(politician_stats, key=sort_key, reverse=True)[:10]
     ]
     top_wrong = [
-        serialize_politician(r) for r in sorted(politician_stats, key=accuracy)[:10]
+        serialize_politician(r) for r in sorted(politician_stats, key=sort_key)[:10]
     ]
 
     data = {
