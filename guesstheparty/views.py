@@ -1,11 +1,12 @@
 import random
+from collections import defaultdict
 
 from django.core.cache import cache
 from django.db.models import Count, Max, Q
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
-from .models import Answer, PARTY_LEANING, Politician, UserSession
+from .models import Answer, CANONICAL_PARTIES, PARTY_LEANING, Politician, UserSession
 from .serializers import AnswerSerializer, PoliticianSerializer
 
 GAME_PARTIES = ["SPD", "CDU/CSU", "Grüne", "AfD", "Die Linke", "FDP"]
@@ -99,7 +100,9 @@ def submit_answer(request):
     us, _ = UserSession.objects.get_or_create(session_key=session_key)
 
     if us.pending_politician_id != int(politician_id):
-        return Response({"error": "politician_id does not match the current question"}, status=400)
+        return Response(
+            {"error": "politician_id does not match the current question"}, status=400
+        )
 
     is_correct = politician.party == guessed_party
     is_spectrum_correct = (
@@ -146,6 +149,86 @@ def stats(request):
 @api_view(["GET"])
 def parties(request):
     return Response(GAME_PARTIES)
+
+
+@api_view(["GET"])
+def politician_search(request):
+    q = request.query_params.get("q", "").strip()
+    if not q:
+        return Response([])
+
+    politicians = Politician.objects.filter(
+        party__in=GAME_PARTIES,
+        image_url__isnull=False,
+        name__icontains=q,
+    ).exclude(image_url="")[:20]
+
+    def image_url_for(p):
+        if not p.image_local:
+            return None
+        return request.build_absolute_uri(f"/media/{p.image_local}")
+
+    return Response(
+        [
+            {
+                "reference": p.reference,
+                "name": p.name,
+                "party": p.party,
+                "parliament": p.parliament,
+                "image": image_url_for(p),
+            }
+            for p in politicians
+        ]
+    )
+
+
+@api_view(["GET"])
+def politician_stats(request, reference):
+    try:
+        politician = Politician.objects.get(
+            reference=reference, party__in=GAME_PARTIES, image_url__isnull=False
+        )
+    except Politician.DoesNotExist:
+        return Response({"error": "Politician not found"}, status=404)
+
+    answers = Answer.objects.filter(politician=politician)
+    total = answers.count()
+    correct = answers.filter(is_correct=True).count()
+
+    guess_counts = {
+        row["guessed_party"]: row["count"]
+        for row in answers.values("guessed_party").annotate(count=Count("id"))
+    }
+
+    confusion = [
+        {
+            "party": party,
+            "count": guess_counts.get(party, 0),
+            "percentage": (
+                round(guess_counts.get(party, 0) / total * 100, 1) if total else 0.0
+            ),
+        }
+        for party in GAME_PARTIES
+    ]
+
+    img = (
+        request.build_absolute_uri(f"/media/{politician.image_local}")
+        if politician.image_local
+        else None
+    )
+
+    return Response(
+        {
+            "reference": politician.reference,
+            "name": politician.name,
+            "party": politician.party,
+            "parliament": politician.parliament,
+            "image": img,
+            "total_answers": total,
+            "accuracy": round(correct / total * 100, 1) if total else 0.0,
+            "confusion": confusion,
+        }
+    )
 
 
 @api_view(["GET"])
@@ -231,9 +314,46 @@ def global_stats(request):
         for row in confusion_qs
     ]
 
+    confusion_matrix_qs = Answer.objects.values(
+        "politician__party", "guessed_party"
+    ).annotate(count=Count("id"))
+    cm_counts = defaultdict(lambda: defaultdict(int))
+    cm_totals = defaultdict(int)
+    for row in confusion_matrix_qs:
+        actual = row["politician__party"]
+        guessed = row["guessed_party"]
+        cm_counts[actual][guessed] += row["count"]
+        cm_totals[actual] += row["count"]
+
+    parties = [p[0] for p in CANONICAL_PARTIES]
+    confusion_matrix = [
+        {
+            "actual": actual,
+            "total": cm_totals[actual],
+            "guesses": {
+                guessed: {
+                    "count": cm_counts[actual].get(guessed, 0),
+                    "pct": (
+                        round(
+                            cm_counts[actual].get(guessed, 0) / cm_totals[actual] * 100,
+                            1,
+                        )
+                        if cm_totals[actual]
+                        else 0.0
+                    ),
+                }
+                for guessed in parties
+            },
+        }
+        for actual in parties
+    ]
+
     politician_stats = list(
         Answer.objects.values(
-            "politician__name", "politician__party", "politician__image_local"
+            "politician__reference",
+            "politician__name",
+            "politician__party",
+            "politician__image_local",
         )
         .annotate(
             total=Count("id"),
@@ -253,6 +373,7 @@ def global_stats(request):
 
     def serialize_politician(row):
         return {
+            "reference": row["politician__reference"],
             "name": row["politician__name"],
             "party": row["politician__party"],
             "image": image_url(row),
@@ -281,6 +402,7 @@ def global_stats(request):
         "party_stats": party_stats,
         "leaning_stats": leaning_stats,
         "confusion": confusion,
+        "confusion_matrix": confusion_matrix,
         "top_correct": top_correct,
         "top_wrong": top_wrong,
     }
