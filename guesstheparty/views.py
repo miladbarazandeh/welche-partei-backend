@@ -71,6 +71,11 @@ def random_politician(request):
 
     pk = random.choice(list(qs.values_list("id", flat=True)))
     politician = Politician.objects.get(pk=pk)
+
+    us, _ = UserSession.objects.get_or_create(session_key=session_key)
+    us.pending_politician_id = pk
+    us.save(update_fields=["pending_politician_id"])
+
     serializer = PoliticianSerializer(politician, context={"request": request})
     return Response(serializer.data)
 
@@ -91,6 +96,11 @@ def submit_answer(request):
         return Response({"error": "Politician not found"}, status=404)
 
     session_key = _ensure_session(request)
+    us, _ = UserSession.objects.get_or_create(session_key=session_key)
+
+    if us.pending_politician_id != int(politician_id):
+        return Response({"error": "politician_id does not match the current question"}, status=400)
+
     is_correct = politician.party == guessed_party
     is_spectrum_correct = (
         PARTY_LEANING.get(politician.party) == PARTY_LEANING.get(guessed_party)
@@ -105,13 +115,12 @@ def submit_answer(request):
         is_spectrum_correct=is_spectrum_correct,
     )
 
-    # Update best streak if needed
+    us.pending_politician_id = None
     if is_correct:
         streak = _compute_streak(session_key)
-        us, _ = UserSession.objects.get_or_create(session_key=session_key)
         if streak > us.best_streak:
             us.best_streak = streak
-            us.save(update_fields=["best_streak", "updated_at"])
+    us.save(update_fields=["pending_politician_id", "best_streak", "updated_at"])
 
     stats = _session_stats(session_key)
 

@@ -34,6 +34,9 @@ class Politician(models.Model):
 class UserSession(models.Model):
     session_key = models.CharField(max_length=40, unique=True)
     best_streak = models.IntegerField(default=0)
+    pending_politician = models.ForeignKey(
+        "Politician", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
