@@ -251,7 +251,7 @@ def global_stats(request):
         }
 
     def sort_key(row):
-        return (row["accuracy"], row["total"])
+        return (accuracy(row), row["total"])
 
     top_correct = [
         serialize_politician(r)
