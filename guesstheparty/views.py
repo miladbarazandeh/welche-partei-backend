@@ -121,14 +121,14 @@ def _session_stats(session_key, config):
 def _image_url_for(request, politician):
     if politician.image_local:
         return request.build_absolute_uri(f"/media/{politician.image_local}")
-    return politician.image_url or None
+    return politician.thumbline_url or politician.image_url or None
 
 
 def _country_politicians(config):
     return Politician.objects.filter(
         country=config["code"],
         party__in=get_source_parties(config),
-    ).exclude(Q(image_local="") & Q(image_url=""))
+    ).exclude(Q(image_local="") & Q(thumbline_url="") & Q(image_url=""))
 
 
 def _actual_party_annotation(config):
@@ -313,7 +313,7 @@ def politician_search(request, country):
             party__in=get_source_parties(config),
             name__icontains=query,
         )
-        .exclude(Q(image_local="") & Q(image_url=""))
+        .exclude(Q(image_local="") & Q(thumbline_url="") & Q(image_url=""))
         .order_by("name")[:20]
     )
 
@@ -603,6 +603,7 @@ def global_stats(request, country):
             "politician__name",
             "actual_party",
             "politician__image_local",
+            "politician__thumbline_url",
             "politician__image_url",
         )
         .annotate(
@@ -618,10 +619,8 @@ def global_stats(request, country):
 
     def image_url(row):
         if row["politician__image_local"]:
-            return request.build_absolute_uri(
-                f"/media/{row['politician__image_local']}"
-            )
-        return row["politician__image_url"] or None
+            return request.build_absolute_uri(f"/media/{row['politician__image_local']}")
+        return row["politician__thumbline_url"] or row["politician__image_url"] or None
 
     def serialize_politician(row):
         return {

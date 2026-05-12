@@ -31,7 +31,7 @@ class PoliticianSerializer(serializers.ModelSerializer):
             if request:
                 return request.build_absolute_uri(url)
             return url
-        return obj.image_url + "?width=600" or None
+        return obj.thumbline_url or obj.image_url or None
 
 
 class AnswerSerializer(serializers.ModelSerializer):
