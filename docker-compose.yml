@@ -23,7 +23,8 @@ services:
       # context: .
       # dockerfile: Dockerfile
     command: >
-      sh -c "python manage.py migrate &&
+      sh -c "pip install -r requirements.txt &&
+             python manage.py migrate &&
              python manage.py collectstatic --noinput &&
              gunicorn --config gunicorn_config.py backend.wsgi:application"
     restart: always
@@ -40,6 +41,12 @@ services:
     depends_on:
       db:
         condition: service_healthy
+
+  redis:
+    image: redis:7.4-alpine
+    command: redis-server --requirepass "${REDIS_PASSWORD}"
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
 
 
 volumes:

@@ -6,12 +6,7 @@ from django.core.management.base import BaseCommand
 from guesstheparty.game_config import get_country_config, get_game_party
 from guesstheparty.models import Politician
 
-DEFAULT_CSV_PATH = (
-    Path(__file__).resolve().parent.parent.parent.parent.parent
-    / "out"
-    / "full_optimized"
-    / "politicians_verified_free.csv"
-)
+DEFAULT_CSV_PATH = Path(__file__).resolve().parent / "politicians_verified_free.csv"
 US_CONFIG = get_country_config("us")
 
 
@@ -61,7 +56,12 @@ class Command(BaseCommand):
                 raw_party = (row.get("party") or "").strip()
                 game_party = get_game_party(US_CONFIG, raw_party)
                 image_url = (row.get("image_url") or "").strip()
-                if not source_identifier or not raw_party or not game_party or not image_url:
+                if (
+                    not source_identifier
+                    or not raw_party
+                    or not game_party
+                    or not image_url
+                ):
                     skipped += 1
                     continue
 
@@ -75,7 +75,9 @@ class Command(BaseCommand):
                         "parliament": build_parliament_label(row),
                         "image_url": image_url,
                         "image_page_url": (row.get("image_page_url") or "").strip(),
-                        "license_short_name": (row.get("license_short_name") or "").strip(),
+                        "license_short_name": (
+                            row.get("license_short_name") or ""
+                        ).strip(),
                         "license_url": (row.get("license_url") or "").strip(),
                         "attribution_text": (row.get("attribution_text") or "").strip(),
                         "author_name": (row.get("author_name") or "").strip(),

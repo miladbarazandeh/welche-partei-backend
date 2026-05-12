@@ -10,16 +10,28 @@ class PoliticianSerializer(serializers.ModelSerializer):
     class Meta:
         model = Politician
         # party is intentionally omitted — it's what the user must guess
-        fields = ["id", "name", "parliament", "image_path"]
+        fields = [
+            "id",
+            "name",
+            "parliament",
+            "image_path",
+            "attribution_text",
+            "credit_text",
+            "credit_url",
+            "image_page_url",
+            "license_short_name",
+            "license_url",
+            "author_name",
+        ]
 
     def get_image_path(self, obj):
-        request = self.context.get('request')
+        request = self.context.get("request")
         if obj.image_local:
             url = f"/media/{obj.image_local}"
             if request:
                 return request.build_absolute_uri(url)
             return url
-        return obj.image_url or None
+        return obj.image_url + "?width=600" or None
 
 
 class AnswerSerializer(serializers.ModelSerializer):

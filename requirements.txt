@@ -3,3 +3,4 @@ djangorestframework>=3.15,<4.0
 django-cors-headers>=4.0,<5.0
 gunicorn>=23.0,<24.0
 psycopg2-binary>=2.9,<3.0
+coolname>=2.2,<3.0

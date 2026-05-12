@@ -23,7 +23,7 @@ class Politician(models.Model):
     license_short_name = models.CharField(max_length=200, blank=True)
     license_url = models.URLField(max_length=1000, blank=True)
     attribution_text = models.TextField(blank=True)
-    author_name = models.CharField(max_length=255, blank=True)
+    author_name = models.CharField(max_length=5000, blank=True)
     author_url = models.URLField(max_length=1000, blank=True)
     credit_text = models.TextField(blank=True)
     credit_url = models.URLField(max_length=1000, blank=True)
@@ -31,7 +31,9 @@ class Politician(models.Model):
 
     class Meta:
         indexes = [
-            models.Index(fields=["country", "party"], name="guessthepar_country_party_idx"),
+            models.Index(
+                fields=["country", "party"], name="guessthepar_country_party_idx"
+            ),
         ]
 
     def save(self, *args, **kwargs):
@@ -68,6 +70,7 @@ class Politician(models.Model):
 
 class UserSession(models.Model):
     session_key = models.CharField(max_length=40, db_index=True)
+    name = models.CharField(max_length=100, blank=True)
     country = models.CharField(max_length=2, choices=COUNTRY_CHOICES, default="DE")
     best_streak = models.IntegerField(default=0)
     pending_politician = models.ForeignKey(

@@ -1,9 +1,31 @@
+import random
 from collections import defaultdict
 
+from coolname import generate_slug
+
 from django.core.cache import cache
-from django.db.models import Count, Max, Q
+from django.db.models import Count, Max, OuterRef, Q, Subquery
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+
+_PROFANITY_BLOCKLIST = {
+    "nigger",
+    "nigga",
+    "faggot",
+    "kike",
+    "spic",
+    "chink",
+    "cunt",
+    "tranny",
+}
+
+
+def _generate_random_name():
+    slug = generate_slug(2)  # e.g. "agile-tiger"
+    name = "".join(part.capitalize() for part in slug.split("-"))
+    number = random.randint(1000, 9999)
+    return f"{name}:{number}"
+
 
 from .game_config import (
     build_game_party_annotation,
@@ -30,14 +52,26 @@ def _country_config_or_404(country):
 
 
 def _get_country_session(session_key, country_code):
-    return UserSession.objects.get_or_create(
+    session, created = UserSession.objects.get_or_create(
         session_key=session_key,
         country=country_code,
     )
+    if created and not session.name:
+        existing_name = (
+            UserSession.objects.filter(session_key=session_key)
+            .exclude(pk=session.pk)
+            .values_list("name", flat=True)
+            .first()
+        )
+        session.name = existing_name or _generate_random_name()
+        session.save(update_fields=["name", "updated_at"])
+    return session, created
 
 
 def _session_answers(session_key, country_code):
-    return Answer.objects.filter(session_key=session_key, politician__country=country_code)
+    return Answer.objects.filter(
+        session_key=session_key, politician__country=country_code
+    )
 
 
 def _compute_streak(session_key, country_code):
@@ -57,11 +91,14 @@ def _session_stats(session_key, config):
     score = qs.filter(is_correct=True).count()
     streak = _compute_streak(session_key, config["code"])
     try:
-        best = UserSession.objects.get(
+        user_session = UserSession.objects.get(
             session_key=session_key, country=config["code"]
-        ).best_streak
+        )
+        best = user_session.best_streak
+        name = user_session.name
     except UserSession.DoesNotExist:
         best = 0
+        name = ""
 
     if config["supports_spectrum"]:
         spectrum_correct = qs.filter(is_spectrum_correct=True).count()
@@ -71,6 +108,7 @@ def _session_stats(session_key, config):
         spectrum_accuracy = None
 
     return {
+        "name": name,
         "score": score,
         "streak": streak,
         "best": best,
@@ -148,7 +186,9 @@ def random_politician(request, country):
 
     session_key = _ensure_session(request)
     seen_ids = list(
-        _session_answers(session_key, config["code"]).values_list("politician_id", flat=True)
+        _session_answers(session_key, config["code"]).values_list(
+            "politician_id", flat=True
+        )
     )
     qs = _country_politicians(config).exclude(id__in=seen_ids)
     if not qs.exists():
@@ -222,7 +262,9 @@ def submit_answer(request, country):
         streak = _compute_streak(session_key, config["code"])
         if streak > user_session.best_streak:
             user_session.best_streak = streak
-    user_session.save(update_fields=["pending_politician_id", "best_streak", "updated_at"])
+    user_session.save(
+        update_fields=["pending_politician_id", "best_streak", "updated_at"]
+    )
 
     stats = _session_stats(session_key, config)
     return Response(
@@ -335,7 +377,6 @@ def politician_stats(request, country, reference):
             "image_page_url": politician.image_page_url,
             "license_short_name": politician.license_short_name,
             "license_url": politician.license_url,
-            "attribution_text": politician.attribution_text,
             "author_name": politician.author_name,
             "author_url": politician.author_url,
             "credit_text": politician.credit_text,
@@ -347,6 +388,65 @@ def politician_stats(request, country, reference):
     )
 
 
+def _user_ranking(request, config):
+    session_key = request.session.session_key
+    if not session_key:
+        return None
+
+    cache_key = f"user_ranking:{config['code']}:{session_key}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    base_answers = Answer.objects.filter(
+        politician__country=config["code"],
+        politician__party__in=get_source_parties(config),
+    )
+    user_answers = base_answers.filter(session_key=session_key)
+    user_total = user_answers.count()
+    user_correct = user_answers.filter(is_correct=True).count()
+
+    try:
+        user_session = UserSession.objects.get(
+            session_key=session_key, country=config["code"]
+        )
+        user_name = user_session.name
+    except UserSession.DoesNotExist:
+        user_name = ""
+
+    rank = (
+        base_answers.values("session_key")
+        .annotate(
+            correct=Count("id", filter=Q(is_correct=True)),
+            total=Count("id"),
+        )
+        .filter(total__gt=10, correct__gt=user_correct)
+        .count()
+    ) + 1
+
+    cache.set(
+        cache_key,
+        {
+            "rank": rank,
+            "name": user_name,
+            "correct": user_correct,
+            "total": user_total,
+            "accuracy": (
+                round(user_correct / user_total * 100, 1) if user_total else 0.0
+            ),
+        },
+        timeout=300,
+    )  # Cache for 5 minutes
+
+    return {
+        "rank": rank,
+        "name": user_name,
+        "correct": user_correct,
+        "total": user_total,
+        "accuracy": round(user_correct / user_total * 100, 1) if user_total else 0.0,
+    }
+
+
 @api_view(["GET"])
 def global_stats(request, country):
     config = _country_config_or_404(country)
@@ -356,7 +456,9 @@ def global_stats(request, country):
     cache_key = f"global_stats:{config['code']}"
     cached = cache.get(cache_key)
     if cached is not None:
-        return Response(cached)
+        return Response(
+            {**cached, "current_user_ranking": _user_ranking(request, config)}
+        )
 
     answers = Answer.objects.filter(
         politician__country=config["code"],
@@ -381,9 +483,9 @@ def global_stats(request, country):
 
     unique_players = answers.values("session_key").distinct().count()
     global_best_streak = (
-        UserSession.objects.filter(country=config["code"]).aggregate(best=Max("best_streak"))[
-            "best"
-        ]
+        UserSession.objects.filter(country=config["code"]).aggregate(
+            best=Max("best_streak")
+        )["best"]
         or 0
     )
 
@@ -496,7 +598,8 @@ def global_stats(request, country):
     ]
 
     politician_stats = list(
-        answers.annotate(actual_party=_actual_party_annotation(config)).values(
+        answers.annotate(actual_party=_actual_party_annotation(config))
+        .values(
             "politician__reference",
             "politician__name",
             "actual_party",
@@ -516,7 +619,9 @@ def global_stats(request, country):
 
     def image_url(row):
         if row["politician__image_local"]:
-            return request.build_absolute_uri(f"/media/{row['politician__image_local']}")
+            return request.build_absolute_uri(
+                f"/media/{row['politician__image_local']}"
+            )
         return row["politician__image_url"] or None
 
     def serialize_politician(row):
@@ -536,8 +641,34 @@ def global_stats(request, country):
         for row in sorted(politician_stats, key=sort_key, reverse=True)[:10]
     ]
     top_wrong = [
-        serialize_politician(row)
-        for row in sorted(politician_stats, key=sort_key)[:10]
+        serialize_politician(row) for row in sorted(politician_stats, key=sort_key)[:10]
+    ]
+
+    session_name_sq = UserSession.objects.filter(
+        session_key=OuterRef("session_key"),
+        country=config["code"],
+    ).values("name")[:1]
+
+    top_sessions_qs = (
+        answers.values("session_key")
+        .annotate(
+            correct=Count("id", filter=Q(is_correct=True)),
+            total=Count("id"),
+            name=Subquery(session_name_sq),
+        )
+        .filter(total__gt=10)
+        .order_by("-correct")[:10]
+    )
+    top_sessions = [
+        {
+            "name": row["name"] or "",
+            "correct": row["correct"],
+            "total": row["total"],
+            "accuracy": (
+                round(row["correct"] / row["total"] * 100, 1) if row["total"] else 0.0
+            ),
+        }
+        for row in top_sessions_qs
     ]
 
     data = {
@@ -554,6 +685,22 @@ def global_stats(request, country):
         "confusion_matrix": confusion_matrix,
         "top_correct": top_correct,
         "top_wrong": top_wrong,
+        "top_users": top_sessions,
     }
     cache.set(cache_key, data, 60)
-    return Response(data)
+    return Response({**data, "current_user_ranking": _user_ranking(request, config)})
+
+
+@api_view(["PATCH"])
+def session_name(request):
+    raw = request.data.get("name", "")
+    name = raw.strip() if isinstance(raw, str) else ""
+    if not name:
+        return Response({"error": "name is required"}, status=400)
+    if len(name) > 50:
+        return Response({"error": "name must be 50 characters or fewer"}, status=400)
+    if any(slur in name.lower() for slur in _PROFANITY_BLOCKLIST):
+        return Response({"error": "name contains disallowed content"}, status=400)
+    session_key = _ensure_session(request)
+    UserSession.objects.filter(session_key=session_key).update(name=name)
+    return Response({"name": name})
