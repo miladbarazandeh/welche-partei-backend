@@ -255,7 +255,6 @@ def submit_answer(request, country):
         is_correct=is_correct,
         is_spectrum_correct=is_spectrum_correct,
     )
-    cache.delete(f"global_stats:{config['code']}")
 
     user_session.pending_politician_id = None
     if is_correct:
