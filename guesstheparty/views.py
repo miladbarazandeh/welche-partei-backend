@@ -454,10 +454,6 @@ def _get_user_rank(config, session_key):
         correct=Count("id", filter=Q(is_correct=True)), total=Count("id")
     )
 
-    # if user_stats["total"] <= 10:
-    #     cache.set(cache_key, None, _LEADERBOARD_TTL)
-    #     return None
-
     correct = user_stats["correct"]
     total = user_stats["total"]
 
@@ -469,16 +465,8 @@ def _get_user_rank(config, session_key):
         + 1
     )
 
-    name = (
-        UserSession.objects.filter(session_key=session_key, country=config["code"])
-        .values_list("name", flat=True)
-        .first()
-        or ""
-    )
-
     result = {
         "rank": rank,
-        "name": name,
         "correct": correct,
         "total": total,
         "accuracy": round(correct / total * 100, 1) if total else 0.0,
