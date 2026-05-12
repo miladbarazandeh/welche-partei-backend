@@ -31,7 +31,7 @@ class PoliticianSerializer(serializers.ModelSerializer):
             if request:
                 return request.build_absolute_uri(url)
             return url
-        return obj.thumbline_url or obj.image_url or None
+        return obj.thumbnail_url or obj.image_url or None
 
 
 class AnswerSerializer(serializers.ModelSerializer):

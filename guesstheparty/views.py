@@ -121,14 +121,14 @@ def _session_stats(session_key, config):
 def _image_url_for(request, politician):
     if politician.image_local:
         return request.build_absolute_uri(f"/media/{politician.image_local}")
-    return politician.thumbline_url or politician.image_url or None
+    return politician.thumbnail_url or politician.image_url or None
 
 
 def _country_politicians(config):
     return Politician.objects.filter(
         country=config["code"],
         party__in=get_source_parties(config),
-    ).exclude(Q(image_local="") & Q(thumbline_url="") & Q(image_url=""))
+    ).exclude(Q(image_local="") & Q(thumbnail_url="") & Q(image_url=""))
 
 
 def _actual_party_annotation(config):
@@ -313,7 +313,7 @@ def politician_search(request, country):
             party__in=get_source_parties(config),
             name__icontains=query,
         )
-        .exclude(Q(image_local="") & Q(thumbline_url="") & Q(image_url=""))
+        .exclude(Q(image_local="") & Q(thumbnail_url="") & Q(image_url=""))
         .order_by("name")[:20]
     )
 
@@ -387,78 +387,109 @@ def politician_stats(request, country, reference):
     )
 
 
-def _user_ranking(request, config):
-    session_key = request.session.session_key
-    if not session_key:
-        return None
+_FAST_TTL = 93
+_SLOW_TTL = 650
+_LEADERBOARD_TTL = 307
 
-    cache_key = f"user_ranking:{config['code']}:{session_key}"
+
+def _get_leaderboard_snapshot(config):
+    cache_key = f"leaderboard:{config['code']}"
     cached = cache.get(cache_key)
     if cached is not None:
         return cached
 
-    base_answers = Answer.objects.filter(
-        politician__country=config["code"],
-        politician__party__in=get_source_parties(config),
-    )
-    user_answers = base_answers.filter(session_key=session_key)
-    user_total = user_answers.count()
-    user_correct = user_answers.filter(is_correct=True).count()
+    session_name_sq = UserSession.objects.filter(
+        session_key=OuterRef("session_key"),
+        country=config["code"],
+    ).values("name")[:1]
 
-    try:
-        user_session = UserSession.objects.get(
-            session_key=session_key, country=config["code"]
+    sessions = list(
+        Answer.objects.filter(
+            politician__country=config["code"],
+            politician__party__in=get_source_parties(config),
         )
-        user_name = user_session.name
-    except UserSession.DoesNotExist:
-        user_name = ""
-
-    rank = (
-        base_answers.values("session_key")
+        .values("session_key")
         .annotate(
             correct=Count("id", filter=Q(is_correct=True)),
             total=Count("id"),
+            name=Subquery(session_name_sq),
         )
-        .filter(total__gt=10, correct__gt=user_correct)
-        .count()
-    ) + 1
+        .filter(total__gt=10)
+        .order_by("-correct")
+    )
+    cache.set(cache_key, sessions, _LEADERBOARD_TTL)
+    return sessions
 
-    cache.set(
-        cache_key,
+
+def _top_users(sessions, session_key):
+    return [
         {
-            "rank": rank,
-            "name": user_name,
-            "correct": user_correct,
-            "total": user_total,
+            "name": row["name"] or "",
+            "correct": row["correct"],
+            "total": row["total"],
             "accuracy": (
-                round(user_correct / user_total * 100, 1) if user_total else 0.0
+                round(row["correct"] / row["total"] * 100, 1) if row["total"] else 0.0
             ),
-        },
-        timeout=300,
-    )  # Cache for 5 minutes
+            "is_current_user": row["session_key"] == session_key,
+        }
+        for row in sessions[:10]
+    ]
 
-    return {
+
+_CACHE_MISS = object()
+
+
+def _get_user_rank(config, session_key):
+    cache_key = f"user_rank:{config['code']}:{session_key}"
+    cached = cache.get(cache_key, _CACHE_MISS)
+    if cached is not _CACHE_MISS:
+        return cached
+
+    base_qs = Answer.objects.filter(
+        politician__country=config["code"],
+        politician__party__in=get_source_parties(config),
+    )
+
+    user_stats = base_qs.filter(session_key=session_key).aggregate(
+        correct=Count("id", filter=Q(is_correct=True)), total=Count("id")
+    )
+
+    # if user_stats["total"] <= 10:
+    #     cache.set(cache_key, None, _LEADERBOARD_TTL)
+    #     return None
+
+    correct = user_stats["correct"]
+    total = user_stats["total"]
+
+    rank = (
+        base_qs.values("session_key")
+        .annotate(correct=Count("id", filter=Q(is_correct=True)), total=Count("id"))
+        .filter(correct__gt=correct)
+        .count()
+        + 1
+    )
+
+    name = (
+        UserSession.objects.filter(session_key=session_key, country=config["code"])
+        .values_list("name", flat=True)
+        .first()
+        or ""
+    )
+
+    result = {
         "rank": rank,
-        "name": user_name,
-        "correct": user_correct,
-        "total": user_total,
-        "accuracy": round(user_correct / user_total * 100, 1) if user_total else 0.0,
+        "name": name,
+        "correct": correct,
+        "total": total,
+        "accuracy": round(correct / total * 100, 1) if total else 0.0,
+        "is_current_user": True,
     }
 
+    cache.set(cache_key, result, _LEADERBOARD_TTL)
+    return result
 
-@api_view(["GET"])
-def global_stats(request, country):
-    config = _country_config_or_404(country)
-    if isinstance(config, Response):
-        return config
 
-    cache_key = f"global_stats:{config['code']}"
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return Response(
-            {**cached, "current_user_ranking": _user_ranking(request, config)}
-        )
-
+def _compute_fast_stats(config):
     answers = Answer.objects.filter(
         politician__country=config["code"],
         politician__party__in=get_source_parties(config),
@@ -468,6 +499,7 @@ def global_stats(request, country):
     overall_accuracy = (
         round(total_correct / total_answers * 100, 1) if total_answers else 0.0
     )
+    unique_players = answers.values("session_key").distinct().count()
 
     if config["supports_spectrum"]:
         total_spectrum_correct = answers.filter(is_spectrum_correct=True).count()
@@ -480,7 +512,22 @@ def global_stats(request, country):
         total_spectrum_correct = None
         spectrum_accuracy = None
 
-    unique_players = answers.values("session_key").distinct().count()
+    return {
+        "total_answers": total_answers,
+        "total_correct": total_correct,
+        "overall_accuracy": overall_accuracy,
+        "unique_players": unique_players,
+        "total_spectrum_correct": total_spectrum_correct,
+        "spectrum_accuracy": spectrum_accuracy,
+    }
+
+
+def _compute_slow_stats(config, request):
+    answers = Answer.objects.filter(
+        politician__country=config["code"],
+        politician__party__in=get_source_parties(config),
+    )
+
     global_best_streak = (
         UserSession.objects.filter(country=config["code"]).aggregate(
             best=Max("best_streak")
@@ -603,7 +650,7 @@ def global_stats(request, country):
             "politician__name",
             "actual_party",
             "politician__image_local",
-            "politician__thumbline_url",
+            "politician__thumbnail_url",
             "politician__image_url",
         )
         .annotate(
@@ -614,68 +661,38 @@ def global_stats(request, country):
         .filter(total__gt=10)
     )
 
-    def accuracy(row):
+    def _accuracy(row):
         return row["correct"] / row["total"]
 
-    def image_url(row):
+    def _image_url(row):
         if row["politician__image_local"]:
-            return request.build_absolute_uri(f"/media/{row['politician__image_local']}")
-        return row["politician__thumbline_url"] or row["politician__image_url"] or None
+            return request.build_absolute_uri(
+                f"/media/{row['politician__image_local']}"
+            )
+        return row["politician__thumbnail_url"] or row["politician__image_url"] or None
 
-    def serialize_politician(row):
+    def _serialize_politician(row):
         return {
             "reference": row["politician__reference"],
             "name": row["politician__name"],
             "party": row["actual_party"],
-            "image": image_url(row),
-            "accuracy": round(accuracy(row) * 100, 1),
+            "image": _image_url(row),
+            "accuracy": round(_accuracy(row) * 100, 1),
         }
 
-    def sort_key(row):
-        return (accuracy(row), row["total"])
+    def _sort_key(row):
+        return (_accuracy(row), row["total"])
 
     top_correct = [
-        serialize_politician(row)
-        for row in sorted(politician_stats, key=sort_key, reverse=True)[:10]
+        _serialize_politician(row)
+        for row in sorted(politician_stats, key=_sort_key, reverse=True)[:10]
     ]
     top_wrong = [
-        serialize_politician(row) for row in sorted(politician_stats, key=sort_key)[:10]
+        _serialize_politician(row)
+        for row in sorted(politician_stats, key=_sort_key)[:10]
     ]
 
-    session_name_sq = UserSession.objects.filter(
-        session_key=OuterRef("session_key"),
-        country=config["code"],
-    ).values("name")[:1]
-
-    top_sessions_qs = (
-        answers.values("session_key")
-        .annotate(
-            correct=Count("id", filter=Q(is_correct=True)),
-            total=Count("id"),
-            name=Subquery(session_name_sq),
-        )
-        .filter(total__gt=10)
-        .order_by("-correct")[:10]
-    )
-    top_sessions = [
-        {
-            "name": row["name"] or "",
-            "correct": row["correct"],
-            "total": row["total"],
-            "accuracy": (
-                round(row["correct"] / row["total"] * 100, 1) if row["total"] else 0.0
-            ),
-        }
-        for row in top_sessions_qs
-    ]
-
-    data = {
-        "total_answers": total_answers,
-        "total_correct": total_correct,
-        "overall_accuracy": overall_accuracy,
-        "total_spectrum_correct": total_spectrum_correct,
-        "spectrum_accuracy": spectrum_accuracy,
-        "unique_players": unique_players,
+    return {
         "global_best_streak": global_best_streak,
         "party_stats": party_stats,
         "leaning_stats": leaning_stats,
@@ -683,10 +700,40 @@ def global_stats(request, country):
         "confusion_matrix": confusion_matrix,
         "top_correct": top_correct,
         "top_wrong": top_wrong,
-        "top_users": top_sessions,
     }
-    cache.set(cache_key, data, 60)
-    return Response({**data, "current_user_ranking": _user_ranking(request, config)})
+
+
+@api_view(["GET"])
+def global_stats(request, country):
+    config = _country_config_or_404(country)
+    if isinstance(config, Response):
+        return config
+
+    fast_cache_key = f"global_stats_fast:{config['code']}"
+    slow_cache_key = f"global_stats_slow:{config['code']}"
+
+    fast_data = cache.get(fast_cache_key)
+    if fast_data is None:
+        fast_data = _compute_fast_stats(config)
+        cache.set(fast_cache_key, fast_data, _FAST_TTL)
+
+    slow_data = cache.get(slow_cache_key)
+    if slow_data is None:
+        slow_data = _compute_slow_stats(config, request)
+        cache.set(slow_cache_key, slow_data, _SLOW_TTL)
+
+    leaderboard_sessions = _get_leaderboard_snapshot(config)
+    session_key = _ensure_session(request)
+    top10 = leaderboard_sessions[:10]
+
+    return Response(
+        {
+            **fast_data,
+            **slow_data,
+            "top_users": _top_users(leaderboard_sessions, session_key),
+            "user_rank": _get_user_rank(config, session_key),
+        }
+    )
 
 
 @api_view(["PATCH"])

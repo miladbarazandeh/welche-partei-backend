@@ -18,7 +18,7 @@ class Politician(models.Model):
     party = models.CharField(max_length=100)
     parliament = models.CharField(max_length=200)
     image_url = models.URLField(max_length=1000, blank=True)
-    thumbline_url = models.URLField(max_length=1000, blank=True)
+    thumbnail_url = models.URLField(max_length=1000, blank=True)
     image_local = models.CharField(max_length=500, blank=True)
     image_page_url = models.URLField(max_length=1000, blank=True)
     license_short_name = models.CharField(max_length=200, blank=True)

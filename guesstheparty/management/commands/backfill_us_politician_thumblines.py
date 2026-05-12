@@ -5,16 +5,11 @@ from django.core.management.base import BaseCommand
 
 from guesstheparty.models import Politician
 
-DEFAULT_CSV_PATH = (
-    Path(__file__).resolve().parent.parent.parent.parent.parent
-    / "out"
-    / "full_optimized"
-    / "politicians_verified_free.csv"
-)
+DEFAULT_CSV_PATH = Path(__file__).resolve().parent / "politicians_verified_free (1).csv"
 
 
 class Command(BaseCommand):
-    help = "Backfill thumbline_url for existing US politicians from the verified CSV."
+    help = "Backfill thumbnail_url for existing US politicians from the verified CSV."
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -31,7 +26,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--overwrite",
             action="store_true",
-            help="Replace existing non-empty thumbline_url values.",
+            help="Replace existing non-empty thumbnail_url values.",
         )
 
     def handle(self, *args, **options):
@@ -48,9 +43,9 @@ class Command(BaseCommand):
             reader = csv.DictReader(handle)
             for row in reader:
                 source_identifier = (row.get("person_id") or "").strip()
-                thumbline_url = (row.get("image_url") or "").strip()
-                if source_identifier and thumbline_url:
-                    thumbline_by_source_identifier[source_identifier] = thumbline_url
+                thumbnail_url = (row.get("image_url") or "").strip()
+                if source_identifier and thumbnail_url:
+                    thumbline_by_source_identifier[source_identifier] = thumbnail_url
 
         if not thumbline_by_source_identifier:
             self.stderr.write("No usable thumbnail rows found in CSV.")
@@ -63,30 +58,30 @@ class Command(BaseCommand):
         queryset = Politician.objects.filter(
             country="US",
             source_identifier__in=thumbline_by_source_identifier,
-        ).only("id", "source_identifier", "thumbline_url")
+        ).only("id", "source_identifier", "thumbnail_url")
 
         for politician in queryset.iterator():
             source_identifier = politician.source_identifier or ""
             seen_identifiers.add(source_identifier)
             matched += 1
 
-            thumbline_url = thumbline_by_source_identifier[source_identifier]
-            if politician.thumbline_url == thumbline_url:
+            thumbnail_url = thumbline_by_source_identifier[source_identifier]
+            if politician.thumbnail_url == thumbnail_url:
                 unchanged += 1
                 continue
-            if politician.thumbline_url and not overwrite:
+            if politician.thumbnail_url and not overwrite:
                 unchanged += 1
                 continue
 
-            politician.thumbline_url = thumbline_url
+            politician.thumbnail_url = thumbnail_url
             batch.append(politician)
             if len(batch) == batch_size:
-                Politician.objects.bulk_update(batch, ["thumbline_url"])
+                Politician.objects.bulk_update(batch, ["thumbnail_url"])
                 updated += len(batch)
                 batch = []
 
         if batch:
-            Politician.objects.bulk_update(batch, ["thumbline_url"])
+            Politician.objects.bulk_update(batch, ["thumbnail_url"])
             updated += len(batch)
 
         missing_in_db = len(thumbline_by_source_identifier) - len(seen_identifiers)
