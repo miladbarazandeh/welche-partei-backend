@@ -3,24 +3,11 @@ from pathlib import Path
 
 from django.core.management.base import BaseCommand
 
+from guesstheparty.game_config import get_country_config, get_game_party
 from guesstheparty.models import Politician
 
-# Normalize raw party labels from abgeordnetenwatch to canonical game parties.
-# The soft-hyphen (­) appears in "BÜNDNIS 90/­DIE GRÜNEN" from the API.
-PARTY_MAP = {
-    'SPD': 'SPD',
-    'CDU': 'CDU/CSU',
-    'CSU': 'CDU/CSU',
-    'CDU/CSU': 'CDU/CSU',
-    'BÜNDNIS 90/­DIE GRÜNEN': 'Grüne',
-    'GRÜNE': 'Grüne',
-    'AfD': 'AfD',
-    'Die Linke': 'Die Linke',
-    'DIE LINKE': 'Die Linke',
-    'FDP': 'FDP',
-}
-
 JSON_PATH = Path(__file__).resolve().parent.parent.parent.parent / 'politician_data' / 'politicians.json'
+DE_CONFIG = get_country_config("de")
 
 
 class Command(BaseCommand):
@@ -37,8 +24,8 @@ class Command(BaseCommand):
         created = updated = skipped = 0
 
         for p in data:
-            party = PARTY_MAP.get(p.get('party', ''))
-            if not party:
+            raw_party = (p.get('party') or '').strip()
+            if not get_game_party(DE_CONFIG, raw_party):
                 skipped += 1
                 continue
             if not p.get('image_local'):
@@ -48,11 +35,22 @@ class Command(BaseCommand):
             _, was_created = Politician.objects.update_or_create(
                 abgeordnetenwatch_id=p['id'],
                 defaults={
+                    'country': 'DE',
+                    'source_identifier': f"abgeordnetenwatch:{p['id']}",
+                    'source_dataset': 'abgeordnetenwatch',
                     'name': p['name'],
-                    'party': party,
+                    'party': raw_party,
                     'parliament': p.get('parliament', ''),
                     'image_url': p.get('image_url', ''),
                     'image_local': p.get('image_local', ''),
+                    'image_page_url': p.get('image_page_url', ''),
+                    'license_short_name': p.get('license_short_name', ''),
+                    'license_url': p.get('license_url', ''),
+                    'attribution_text': p.get('attribution_text', ''),
+                    'author_name': p.get('author_name', ''),
+                    'author_url': p.get('author_url', ''),
+                    'credit_text': p.get('credit_text', ''),
+                    'credit_url': p.get('credit_url', ''),
                 },
             )
             if was_created:
