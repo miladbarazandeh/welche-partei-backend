@@ -1,0 +1,86 @@
+{
+  "manifest_candidate_records": 367,
+  "remote_candidate_records": 0,
+  "downloaded_images": 0,
+  "questionnaire_versions": 0,
+  "policy_questions": 0,
+  "party_position_assertions": 244,
+  "party_questionnaire_outreach": 0,
+  "party_profile_facts": 79,
+  "party_social_accounts": 42,
+  "party_source_context_items": 205,
+  "local_record_file_records": 367,
+  "local_party_position_record_file_records": 570,
+  "candidates": 239,
+  "candidacies": 349,
+  "parties": 17,
+  "districts": 90,
+  "facts": 261,
+  "images": 85,
+  "issues": 9,
+  "issue_positions": 59,
+  "public_party_position_assertions": 244,
+  "public_party_match_answers": 0,
+  "public_party_questionnaire_outreach": 0,
+  "public_party_profile_facts": 79,
+  "public_party_social_accounts": 42,
+  "public_party_source_context_items": 205,
+  "social_accounts": 148,
+  "social_profile_checks": 148,
+  "news_search_checks": 212,
+  "candidate_evidence_items": 480,
+  "public_candidate_evidence_items": 0,
+  "candidate_highlights": 0,
+  "source_assertions": 1005,
+  "issues_this_run": 0,
+  "issues_total": 150,
+  "candidacies_by_status": {
+    "provisional": 349
+  },
+  "candidacies_by_role": {
+    "direct_candidate": 163,
+    "district_list": 109,
+    "state_list": 77
+  },
+  "direct_candidate_coverage_by_party": [
+    {
+      "party_id": "die-linke",
+      "party": "Die Linke",
+      "candidate_records": 7,
+      "constituencies": 7
+    },
+    {
+      "party_id": "gruene",
+      "party": "GRÜNE",
+      "candidate_records": 78,
+      "constituencies": 78
+    },
+    {
+      "party_id": "spd",
+      "party": "SPD",
+      "candidate_records": 78,
+      "constituencies": 78
+    }
+  ],
+  "images_by_publication_status": {
+    "hidden_pending_rights": 85
+  },
+  "issue_positions_by_publication_status": {
+    "hidden": 3,
+    "published": 56
+  },
+  "party_position_assertions_by_publication_status": {
+    "published": 244
+  },
+  "social_accounts_by_publication_status": {
+    "published": 148
+  },
+  "candidate_evidence_items_by_publication_status": {
+    "hidden": 480
+  },
+  "candidate_evidence_items_by_kind": {
+    "candidate_social_post": 44,
+    "independent_news_report": 436
+  },
+  "candidate_highlights_by_publication_status": {}
+}

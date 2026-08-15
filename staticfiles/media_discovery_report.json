@@ -1,0 +1,22 @@
+{
+  "status": "completed",
+  "mode": "both",
+  "startDate": "2025-01-01",
+  "endDate": "2026-08-05",
+  "privacy": "Private review-pending discovery only; no post/article body, social graph, engagement, sentiment, or public evidence is produced.",
+  "candidateUniverse": 212,
+  "news": {
+    "total": 211,
+    "completed": 204,
+    "returned_results": 446,
+    "stored_leads": 435,
+    "withheld_sensitive": 11,
+    "network_error": 7
+  },
+  "social": {
+    "total": 147,
+    "discovered_post_urls": 44,
+    "completed": 146,
+    "network_error": 1
+  }
+}
