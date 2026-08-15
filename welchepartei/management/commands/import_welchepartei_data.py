@@ -59,6 +59,12 @@ class Command(BaseCommand):
             )
         self.stdout.write(self.style.SUCCESS(f"  {len(parties)} parties upserted"))
 
+        # Remove parties no longer in the fixture (e.g. HEIMAT, dropped because
+        # it runs district-only lists). Cascades to their positions.
+        stale_parties, _ = Party.objects.exclude(id__in=[p["id"] for p in parties]).delete()
+        if stale_parties:
+            self.stdout.write(self.style.WARNING(f"  Removed {stale_parties} stale party/position rows no longer in the fixture"))
+
         # ── Issues ────────────────────────────────────────────────────────────
         for iss in issues:
             Issue.objects.update_or_create(
@@ -66,6 +72,15 @@ class Command(BaseCommand):
                 defaults={k: v for k, v in iss.items() if k != "id"},
             )
         self.stdout.write(self.style.SUCCESS(f"  {len(issues)} issues upserted"))
+
+        # Remove issues no longer in the fixture (e.g. the old federal-flavored
+        # questions, kita-provider-model, hospital-ownership). Cascades to
+        # their positions — a plain update_or_create loop never deletes rows
+        # that were removed from the fixture, so without this, retired issues
+        # and their stale positions linger in the DB forever.
+        stale_issues, _ = Issue.objects.exclude(id__in=[i["id"] for i in issues]).delete()
+        if stale_issues:
+            self.stdout.write(self.style.WARNING(f"  Removed {stale_issues} stale issue/position rows no longer in the fixture"))
 
         # ── Positions ─────────────────────────────────────────────────────────
         valid_party_ids = {p["id"] for p in parties}
@@ -98,6 +113,20 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(
             f"  {imported} positions imported, {skipped} skipped (unknown party/issue)"
         ))
+
+        # Remove positions whose (party, issue) pair is no longer in the
+        # fixture, even though the party and issue themselves still exist
+        # (e.g. a sourced quote was retracted/replaced rather than the whole
+        # issue being dropped). Without this, a stale position for an
+        # otherwise-valid party/issue pair would never get cleaned up.
+        valid_pairs = {(pos["party_id"], pos["issue_id"]) for pos in positions}
+        stale_positions = 0
+        for row in Position.objects.select_related("party", "issue").all():
+            if (row.party_id, row.issue_id) not in valid_pairs:
+                row.delete()
+                stale_positions += 1
+        if stale_positions:
+            self.stdout.write(self.style.WARNING(f"  Removed {stale_positions} stale position rows no longer in the fixture"))
 
         cache.delete("welchepartei:data")
         self.stdout.write(self.style.SUCCESS("  Cache cleared."))
