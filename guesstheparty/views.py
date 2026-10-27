@@ -477,25 +477,34 @@ def _get_user_rank(config, session_key):
     return result
 
 
-def _compute_fast_stats(config):
-    answers = Answer.objects.filter(
+def _cached(key, ttl, compute):
+    value = cache.get(key, _CACHE_MISS)
+    if value is _CACHE_MISS:
+        value = compute()
+        cache.set(key, value, ttl)
+    return value
+
+
+def _source_answers(config):
+    return Answer.objects.filter(
         politician__country=config["code"],
         politician__party__in=get_source_parties(config),
     )
+
+
+def _pct(part, whole):
+    return round(part / whole * 100, 1) if whole else 0.0
+
+
+def _compute_fast_stats(config):
+    answers = _source_answers(config)
     total_answers = answers.count()
     total_correct = answers.filter(is_correct=True).count()
-    overall_accuracy = (
-        round(total_correct / total_answers * 100, 1) if total_answers else 0.0
-    )
     unique_players = answers.values("session_key").distinct().count()
 
     if config["supports_spectrum"]:
         total_spectrum_correct = answers.filter(is_spectrum_correct=True).count()
-        spectrum_accuracy = (
-            round(total_spectrum_correct / total_answers * 100, 1)
-            if total_answers
-            else 0.0
-        )
+        spectrum_accuracy = _pct(total_spectrum_correct, total_answers)
     else:
         total_spectrum_correct = None
         spectrum_accuracy = None
@@ -503,136 +512,50 @@ def _compute_fast_stats(config):
     return {
         "total_answers": total_answers,
         "total_correct": total_correct,
-        "overall_accuracy": overall_accuracy,
+        "overall_accuracy": _pct(total_correct, total_answers),
         "unique_players": unique_players,
         "total_spectrum_correct": total_spectrum_correct,
         "spectrum_accuracy": spectrum_accuracy,
     }
 
 
-def _compute_slow_stats(config, request):
-    answers = Answer.objects.filter(
-        politician__country=config["code"],
-        politician__party__in=get_source_parties(config),
-    )
-
-    global_best_streak = (
+def _compute_best_streak(config):
+    return (
         UserSession.objects.filter(country=config["code"]).aggregate(
             best=Max("best_streak")
         )["best"]
         or 0
     )
 
-    party_qs = list(
-        answers.annotate(actual_party=_actual_party_annotation(config))
-        .values("actual_party")
+
+def _compute_pair_counts(config):
+    """One group-by over (actual, guessed) that feeds parties, leanings,
+    confusion and the confusion matrix."""
+    return list(
+        _source_answers(config)
+        .annotate(actual_party=_actual_party_annotation(config))
+        .values("actual_party", "guessed_party")
         .annotate(
-            total=Count("id"),
+            count=Count("id"),
             correct=Count("id", filter=Q(is_correct=True)),
             spectrum_correct=Count("id", filter=Q(is_spectrum_correct=True)),
         )
         .exclude(actual_party="")
-        .order_by("actual_party")
     )
-    party_stats = [
-        {
-            "party": row["actual_party"],
-            "total": row["total"],
-            "correct": row["correct"],
-            "accuracy": (
-                round(row["correct"] / row["total"] * 100, 1) if row["total"] else 0.0
-            ),
-        }
-        for row in party_qs
-    ]
 
-    if config["supports_spectrum"]:
-        leaning_buckets = {}
-        for row in party_qs:
-            leaning = config["leaning_map"].get(row["actual_party"])
-            if leaning is None:
-                continue
-            bucket = leaning_buckets.setdefault(
-                leaning,
-                {"leaning": leaning, "total": 0, "correct": 0, "spectrum_correct": 0},
-            )
-            bucket["total"] += row["total"]
-            bucket["correct"] += row["correct"]
-            bucket["spectrum_correct"] += row["spectrum_correct"]
-        leaning_stats = [
-            {
-                **bucket,
-                "accuracy": (
-                    round(bucket["correct"] / bucket["total"] * 100, 1)
-                    if bucket["total"]
-                    else 0.0
-                ),
-                "spectrum_accuracy": (
-                    round(bucket["spectrum_correct"] / bucket["total"] * 100, 1)
-                    if bucket["total"]
-                    else 0.0
-                ),
-            }
-            for bucket in leaning_buckets.values()
-        ]
-    else:
-        leaning_stats = []
 
-    confusion_qs = (
-        answers.filter(is_correct=False)
+def _get_pair_counts(config):
+    return _cached(
+        f"global_stats_pairs:{config['code']}",
+        _SLOW_TTL,
+        lambda: _compute_pair_counts(config),
+    )
+
+
+def _compute_politician_rows(config):
+    return list(
+        _source_answers(config)
         .annotate(actual_party=_actual_party_annotation(config))
-        .values("actual_party", "guessed_party")
-        .annotate(count=Count("id"))
-        .exclude(actual_party="")
-        .order_by("-count")[:8]
-    )
-    confusion = [
-        {
-            "actual": row["actual_party"],
-            "guessed": row["guessed_party"],
-            "count": row["count"],
-        }
-        for row in confusion_qs
-    ]
-
-    confusion_matrix_qs = (
-        answers.annotate(actual_party=_actual_party_annotation(config))
-        .values("actual_party", "guessed_party")
-        .annotate(count=Count("id"))
-        .exclude(actual_party="")
-    )
-    cm_counts = defaultdict(lambda: defaultdict(int))
-    cm_totals = defaultdict(int)
-    for row in confusion_matrix_qs:
-        actual = row["actual_party"]
-        guessed = row["guessed_party"]
-        cm_counts[actual][guessed] += row["count"]
-        cm_totals[actual] += row["count"]
-
-    confusion_matrix = [
-        {
-            "actual": actual,
-            "total": cm_totals[actual],
-            "guesses": {
-                guessed: {
-                    "count": cm_counts[actual].get(guessed, 0),
-                    "pct": (
-                        round(
-                            cm_counts[actual].get(guessed, 0) / cm_totals[actual] * 100,
-                            1,
-                        )
-                        if cm_totals[actual]
-                        else 0.0
-                    ),
-                }
-                for guessed in config["game_parties"]
-            },
-        }
-        for actual in config["game_parties"]
-    ]
-
-    politician_stats = list(
-        answers.annotate(actual_party=_actual_party_annotation(config))
         .values(
             "politician__reference",
             "politician__name",
@@ -647,6 +570,117 @@ def _compute_slow_stats(config, request):
         )
         .exclude(actual_party="")
         .filter(total__gt=10)
+    )
+
+
+def _section_overview(config, request):
+    return {
+        **_cached(
+            f"global_stats_fast:{config['code']}",
+            _FAST_TTL,
+            lambda: _compute_fast_stats(config),
+        ),
+        "global_best_streak": _cached(
+            f"global_stats_streak:{config['code']}",
+            _SLOW_TTL,
+            lambda: _compute_best_streak(config),
+        ),
+    }
+
+
+def _section_parties(config, request):
+    party_totals = defaultdict(lambda: {"total": 0, "correct": 0, "spectrum_correct": 0})
+    for row in _get_pair_counts(config):
+        totals = party_totals[row["actual_party"]]
+        totals["total"] += row["count"]
+        totals["correct"] += row["correct"]
+        totals["spectrum_correct"] += row["spectrum_correct"]
+
+    party_stats = [
+        {
+            "party": party,
+            "total": totals["total"],
+            "correct": totals["correct"],
+            "accuracy": _pct(totals["correct"], totals["total"]),
+        }
+        for party, totals in sorted(party_totals.items())
+    ]
+
+    leaning_stats = []
+    if config["supports_spectrum"]:
+        leaning_buckets = {}
+        for party, totals in party_totals.items():
+            leaning = config["leaning_map"].get(party)
+            if leaning is None:
+                continue
+            bucket = leaning_buckets.setdefault(
+                leaning,
+                {"leaning": leaning, "total": 0, "correct": 0, "spectrum_correct": 0},
+            )
+            bucket["total"] += totals["total"]
+            bucket["correct"] += totals["correct"]
+            bucket["spectrum_correct"] += totals["spectrum_correct"]
+        leaning_stats = [
+            {
+                **bucket,
+                "accuracy": _pct(bucket["correct"], bucket["total"]),
+                "spectrum_accuracy": _pct(bucket["spectrum_correct"], bucket["total"]),
+            }
+            for bucket in leaning_buckets.values()
+        ]
+
+    return {"party_stats": party_stats, "leaning_stats": leaning_stats}
+
+
+def _section_confusion(config, request):
+    pair_counts = _get_pair_counts(config)
+
+    wrong_pairs = sorted(
+        (
+            (row["count"] - row["correct"], row)
+            for row in pair_counts
+            if row["count"] - row["correct"] > 0
+        ),
+        key=lambda item: -item[0],
+    )[:8]
+    confusion = [
+        {
+            "actual": row["actual_party"],
+            "guessed": row["guessed_party"],
+            "count": wrong,
+        }
+        for wrong, row in wrong_pairs
+    ]
+
+    cm_counts = defaultdict(lambda: defaultdict(int))
+    cm_totals = defaultdict(int)
+    for row in pair_counts:
+        cm_counts[row["actual_party"]][row["guessed_party"]] += row["count"]
+        cm_totals[row["actual_party"]] += row["count"]
+
+    confusion_matrix = [
+        {
+            "actual": actual,
+            "total": cm_totals[actual],
+            "guesses": {
+                guessed: {
+                    "count": cm_counts[actual].get(guessed, 0),
+                    "pct": _pct(cm_counts[actual].get(guessed, 0), cm_totals[actual]),
+                }
+                for guessed in config["game_parties"]
+            },
+        }
+        for actual in config["game_parties"]
+    ]
+
+    return {"confusion": confusion, "confusion_matrix": confusion_matrix}
+
+
+def _section_politicians(config, request):
+    politician_stats = _cached(
+        f"global_stats_politicians:{config['code']}",
+        _SLOW_TTL,
+        lambda: _compute_politician_rows(config),
     )
 
     def _accuracy(row):
@@ -671,24 +705,47 @@ def _compute_slow_stats(config, request):
     def _sort_key(row):
         return (_accuracy(row), row["total"])
 
-    top_correct = [
-        _serialize_politician(row)
-        for row in sorted(politician_stats, key=_sort_key, reverse=True)[:10]
-    ]
-    top_wrong = [
-        _serialize_politician(row)
-        for row in sorted(politician_stats, key=_sort_key)[:10]
-    ]
-
     return {
-        "global_best_streak": global_best_streak,
-        "party_stats": party_stats,
-        "leaning_stats": leaning_stats,
-        "confusion": confusion,
-        "confusion_matrix": confusion_matrix,
-        "top_correct": top_correct,
-        "top_wrong": top_wrong,
+        "top_correct": [
+            _serialize_politician(row)
+            for row in sorted(politician_stats, key=_sort_key, reverse=True)[:10]
+        ],
+        "top_wrong": [
+            _serialize_politician(row)
+            for row in sorted(politician_stats, key=_sort_key)[:10]
+        ],
     }
+
+
+def _section_leaderboard(config, request):
+    leaderboard_sessions = _get_leaderboard_snapshot(config)
+    session_key = _ensure_session(request)
+    return {
+        "top_users": _top_users(leaderboard_sessions, session_key),
+        "user_rank": _get_user_rank(config, session_key),
+    }
+
+
+_STATS_SECTIONS = {
+    "overview": _section_overview,
+    "parties": _section_parties,
+    "confusion": _section_confusion,
+    "politicians": _section_politicians,
+    "leaderboard": _section_leaderboard,
+}
+
+
+@api_view(["GET"])
+def global_stats_section(request, country, section):
+    config = _country_config_or_404(country)
+    if isinstance(config, Response):
+        return config
+
+    builder = _STATS_SECTIONS.get(section)
+    if builder is None:
+        return Response({"error": "Unknown stats section"}, status=404)
+
+    return Response(builder(config, request))
 
 
 @api_view(["GET"])
@@ -697,31 +754,10 @@ def global_stats(request, country):
     if isinstance(config, Response):
         return config
 
-    fast_cache_key = f"global_stats_fast:{config['code']}"
-    slow_cache_key = f"global_stats_slow:{config['code']}"
-
-    fast_data = cache.get(fast_cache_key)
-    if fast_data is None:
-        fast_data = _compute_fast_stats(config)
-        cache.set(fast_cache_key, fast_data, _FAST_TTL)
-
-    slow_data = cache.get(slow_cache_key)
-    if slow_data is None:
-        slow_data = _compute_slow_stats(config, request)
-        cache.set(slow_cache_key, slow_data, _SLOW_TTL)
-
-    leaderboard_sessions = _get_leaderboard_snapshot(config)
-    session_key = _ensure_session(request)
-    top10 = leaderboard_sessions[:10]
-
-    return Response(
-        {
-            **fast_data,
-            **slow_data,
-            "top_users": _top_users(leaderboard_sessions, session_key),
-            "user_rank": _get_user_rank(config, session_key),
-        }
-    )
+    payload = {}
+    for builder in _STATS_SECTIONS.values():
+        payload.update(builder(config, request))
+    return Response(payload)
 
 
 @api_view(["PATCH"])
