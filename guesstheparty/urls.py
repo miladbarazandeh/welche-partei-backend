@@ -17,4 +17,8 @@ urlpatterns = [
     path("countries/<slug:country>/session/stats/", views.session_stats),
     path("countries/<slug:country>/parties/", views.parties),
     path("countries/<slug:country>/global-stats/", views.global_stats),
+    path(
+        "countries/<slug:country>/global-stats/<slug:section>/",
+        views.global_stats_section,
+    ),
 ]
